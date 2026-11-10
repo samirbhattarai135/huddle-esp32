@@ -714,7 +714,31 @@ static options parse_options(int argc, char **argv) {
     return o;
 }
 
+/*
+ * Checks the checkers: a ring of six robots around an empty target cell must
+ * register as a hole by both methods, and that cell, with six occupied
+ * neighbors, as unreachable.
+ */
+static int self_test(void) {
+    static target_shape shape;
+    shape.count = 0;
+    shape.cells[shape.count++] = (huddle_cell){0, 0};
+    for (int w = 0; w < HUDDLE_WALLS; w++) shape.cells[shape.count++] = neighbor_of((huddle_cell){0, 0}, w);
+    shape.view = (huddle_shape){-1, -1, 3, 3, shape.bits};
+    for (int i = 0; i < shape.count; i++) g_target[cell_index(shape.cells[i].p, shape.cells[i].q)] = 1;
+    world wd = {0, 0, 0, {0}};
+    for (int w = 0; w < HUDDLE_WALLS; w++) place_robot(&wd, shape.cells[1 + w]);
+    bool ok = wd.euler == 0 && has_hole_by_flood(&shape) && any_unreachable(&wd);
+    reset_world(&shape, wd.robot_count);
+    printf("checker self-test: %s\n", ok ? "ok" : "FAILED");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--self-test")) {
+        memset(g_robot_at, 0xFF, sizeof g_robot_at);
+        return self_test();
+    }
     options o = parse_options(argc, argv);
     static target_shape shape;
     memset(g_robot_at, 0xFF, sizeof g_robot_at);
