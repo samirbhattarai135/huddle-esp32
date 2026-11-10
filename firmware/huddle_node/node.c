@@ -118,8 +118,11 @@ void node_receive(node *n, const uint8_t mac[NODE_MAC_LEN], const uint8_t *data,
         return;
     }
     int wall = (sender_wall + 3) % HUDDLE_WALLS; /* our wall facing the sender */
+    /* Only the arena's ATTACH line binds a wall to a MAC. A frame from any
+     * other source, or one that beats its ATTACH, is dropped; the neighbor
+     * resends every step. */
+    if (!(n->attached & (1u << wall)) || memcmp(n->peer[wall], mac, NODE_MAC_LEN) != 0) return;
     if (!n->initialized) {
-        attach(n, wall, mac);
         if (!huddle_init_from_neighbor(&n->robot, &n->shape, pose, n->attached)) return;
         n->initialized = true;
         announce_init(n, io);
@@ -128,8 +131,6 @@ void node_receive(node *n, const uint8_t mac[NODE_MAC_LEN], const uint8_t *data,
         sayf(io, "ERR neighbor at %d %d via wall %d does not border us", sender.p, sender.q,
              sender_wall);
         return;
-    } else if (!(n->attached & (1u << wall))) {
-        attach(n, wall, mac); /* its frame beat the arena's ATTACH line */
     }
     n->view[wall] = status;
 }
