@@ -7,7 +7,7 @@ CORE := core/huddle.c core/huddle.h
 SIM := sim/huddle_sim.c
 FQBN := esp32:esp32:esp32
 
-all: build/huddle_sim build/test_core
+all: build/huddle_sim build/test_core build/fake_node
 
 build:
 	mkdir -p build
@@ -24,12 +24,16 @@ build/huddle_sim_roundup: $(CORE) $(SIM) | build
 build/huddle_sim_no_remark1: $(CORE) $(SIM) | build
 	$(CC) $(CFLAGS) -DHUDDLE_SPECIAL_FLANK_SIGNAL=0 -Icore core/huddle.c $(SIM) -o $@
 
+build/fake_node: $(CORE) firmware/huddle_node/node.c firmware/huddle_node/node.h tools/fake_node.c | build
+	$(CC) $(CFLAGS) -Icore -Ifirmware/huddle_node core/huddle.c firmware/huddle_node/node.c tools/fake_node.c -o $@
+
 build/test_core: $(CORE) test/test_core.c | build
 	$(CC) $(CFLAGS) -Icore core/huddle.c test/test_core.c -o $@
 
 # Fails if the algorithm, the checker, or the build breaks.
-test: build/test_core build/huddle_sim build/huddle_sim_O0
+test: build/test_core build/huddle_sim build/huddle_sim_O0 build/fake_node
 	./build/test_core
+	./build/huddle_sim --self-test
 	./build/huddle_sim --shapes 300 --verify-holes > build/sync.txt || (cat build/sync.txt; exit 1)
 	grep RESULT build/sync.txt
 	./build/huddle_sim --shapes 100 --lossy 0.3 3 free > build/lossy.txt || (cat build/lossy.txt; exit 1)
@@ -39,6 +43,10 @@ test: build/test_core build/huddle_sim build/huddle_sim_O0
 	./build/huddle_sim_O0 --shapes 100 > build/o0.txt
 	./build/huddle_sim --shapes 100 > build/o2.txt
 	cmp build/o0.txt build/o2.txt
+	@echo "firmware node logic on the host: 7-board demo, then 40 nodes with 30% frame loss"
+	python3 tools/arena.py --fake 7 > build/arena7.txt || (cat build/arena7.txt; exit 1)
+	python3 tools/arena.py --fake 40 --random --drop 0.3 --k 2 > build/arena40.txt || (cat build/arena40.txt; exit 1)
+	tail -1 build/arena40.txt
 	@echo "make test: OK"
 
 experiments: build/huddle_sim build/huddle_sim_roundup build/huddle_sim_no_remark1
