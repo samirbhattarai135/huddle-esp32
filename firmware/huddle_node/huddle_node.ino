@@ -1,8 +1,12 @@
 // One ESP32 = one in-assembly Huddle robot.
 //
-// Neighbor link: ESP-NOW unicast, one 6-byte frame per attached neighbor per
-// step, holding exactly the paper's two integers (16-bit wall-status word,
-// 32-bit position + wall unit vector).
+// Neighbor link: ESP-NOW unicast, one 18-byte frame per attached neighbor per
+// step: the paper's two integers (16-bit wall-status word, 32-bit position +
+// wall unit vector), a 32-bit sequence number and a 64-bit SipHash-2-4 tag
+// (layout in node.h and the README). The 128-bit tag key is a session key that
+// tools/arena.py sends as "KEY <hex>" over USB serial; it lives in RAM only and
+// is never written to NVS or flash. Frames are neither sent nor accepted until
+// it arrives. ESP-NOW's own encryption is not used.
 //
 // Physical docking is emulated: tools/arena.py tells the board over USB serial
 // which wall a neighbor attached to and that neighbor's MAC address. Signals
@@ -23,7 +27,7 @@ static const uint8_t WIFI_CHANNEL = 1; // every board must share it
 
 struct RadioFrame {
     uint8_t mac[NODE_MAC_LEN];
-    uint8_t data[NODE_PAYLOAD_LEN];
+    uint8_t data[NODE_FRAME_LEN];
     int len;
 };
 
@@ -35,7 +39,7 @@ static uint32_t last_step_ms;
 
 static void log_line(void *, const char *text) { Serial.println(text); }
 
-static void send_frame(void *, const uint8_t mac[NODE_MAC_LEN], const uint8_t payload[NODE_PAYLOAD_LEN]) {
+static void send_frame(void *, const uint8_t mac[NODE_MAC_LEN], const uint8_t frame[NODE_FRAME_LEN]) {
     if (!esp_now_is_peer_exist(mac)) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, mac, NODE_MAC_LEN);
@@ -46,7 +50,7 @@ static void send_frame(void *, const uint8_t mac[NODE_MAC_LEN], const uint8_t pa
             return;
         }
     }
-    esp_now_send(mac, payload, NODE_PAYLOAD_LEN);
+    esp_now_send(mac, frame, NODE_FRAME_LEN);
 }
 
 static const node_io io = {send_frame, log_line, nullptr};
@@ -56,7 +60,7 @@ static void on_receive(const esp_now_recv_info_t *info, const uint8_t *data, int
     RadioFrame frame = {};
     memcpy(frame.mac, info->src_addr, NODE_MAC_LEN);
     frame.len = len;
-    memcpy(frame.data, data, len < NODE_PAYLOAD_LEN ? len : NODE_PAYLOAD_LEN);
+    memcpy(frame.data, data, len < NODE_FRAME_LEN ? len : NODE_FRAME_LEN);
     xQueueSend(rx_queue, &frame, 0); // drop the frame if the queue is full
 }
 

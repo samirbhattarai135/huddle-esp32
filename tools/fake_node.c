@@ -2,6 +2,7 @@
  * Host stand-in for one ESP32 board, for tools/arena.py --fake. Runs the same
  * firmware/huddle_node/node.c. Serial lines come in on stdin; radio frames
  * come in as "RX <mac> <12 hex digits>" and go out as "TX <mac> <hex>".
+ * "KEY <32 hex>" sets the session key (RAM only), as on the board.
  * "TICK" runs one Signal Activation step and answers "TICKED".
  */
 #include <stdio.h>
@@ -13,12 +14,12 @@ static void print_mac(const uint8_t mac[NODE_MAC_LEN]) {
     printf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-static void send_frame(void *ctx, const uint8_t mac[NODE_MAC_LEN], const uint8_t payload[NODE_PAYLOAD_LEN]) {
+static void send_frame(void *ctx, const uint8_t mac[NODE_MAC_LEN], const uint8_t frame[NODE_FRAME_LEN]) {
     (void)ctx;
     printf("TX ");
     print_mac(mac);
     printf(" ");
-    for (int i = 0; i < NODE_PAYLOAD_LEN; i++) printf("%02x", payload[i]);
+    for (int i = 0; i < NODE_FRAME_LEN; i++) printf("%02x", frame[i]);
     printf("\n");
 }
 
@@ -46,15 +47,15 @@ int main(int argc, char **argv) {
     }
     node_reset(&robot);
     const node_io io = {send_frame, log_line, NULL};
-    char line[128];
+    char line[128]; /* longest: "RX <mac> <36 hex>" = 57 chars */
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\r\n")] = '\0';
-        uint8_t mac[NODE_MAC_LEN], payload[NODE_PAYLOAD_LEN];
+        uint8_t mac[NODE_MAC_LEN], frame[NODE_FRAME_LEN];
         if (!strncmp(line, "RX ", 3)) {
-            if (strlen(line) == 3 + 17 + 1 + 2 * NODE_PAYLOAD_LEN &&
+            if (strlen(line) == 3 + 17 + 1 + 2 * NODE_FRAME_LEN &&
                 parse_hex_bytes(line + 3, ':', mac, NODE_MAC_LEN) &&
-                parse_hex_bytes(line + 21, 0, payload, NODE_PAYLOAD_LEN)) {
-                node_receive(&robot, mac, payload, NODE_PAYLOAD_LEN, &io);
+                parse_hex_bytes(line + 21, 0, frame, NODE_FRAME_LEN)) {
+                node_receive(&robot, mac, frame, NODE_FRAME_LEN, &io);
             } else {
                 printf("ERR bad RX line\n");
             }

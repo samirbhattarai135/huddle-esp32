@@ -16,6 +16,7 @@ Host only: python3 tools/arena.py --fake 7      (runs build/fake_node, same node
 import argparse
 import os
 import queue
+import secrets
 import random
 import subprocess
 import sys
@@ -177,6 +178,7 @@ class Arena:
         self.rng = rng
         self.fake = args.fake is not None
         self.placed = {}  # cell -> Board
+        self.session_key = secrets.token_bytes(16).hex()  # fresh per run, never stored
 
     def settle(self):
         """Lets signals and status words propagate before reading signals."""
@@ -233,6 +235,8 @@ class Arena:
         for board in self.boards:
             board.send("RESET")
             board.pump(until="OK RESET")
+            board.send(f"KEY {self.session_key}")
+            board.pump(until="OK KEY")
             board.send("WHO")
             board.pump(until="MAC")
             for p, q in self.shape:
