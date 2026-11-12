@@ -34,6 +34,20 @@ CONFIGS = [
     ("latency", "docking latency 3 steps, no recheck", "huddle_sim", 5000, ["--latency", "3", "off"]),
     ("latency", "latency 3 + drop 30%, delay <= 3, unknown = free", "huddle_sim", 5000,
      ["--latency", "3", "off", "--lossy", "0.3", "3", "free"]),
+    ("replay", "replay 50% of link-steps, overwrite", "huddle_sim", 5000, ["--replay", "0.5"]),
+    ("replay", "replay 50% of link-steps, monotone merge", "huddle_sim", 5000, ["--replay", "0.5", "--merge"]),
+    ("replay", "replay 100% of link-steps, overwrite", "huddle_sim", 5000, ["--replay", "1"]),
+    ("replay", "replay 100% of link-steps, monotone merge", "huddle_sim", 5000, ["--replay", "1", "--merge"]),
+    ("replay", "drop 30%, delay <= 3, replay 50%, overwrite", "huddle_sim", 5000,
+     ["--lossy", "0.3", "3", "free", "--replay", "0.5"]),
+    ("replay", "drop 30%, delay <= 3, replay 50%, monotone merge", "huddle_sim", 5000,
+     ["--lossy", "0.3", "3", "free", "--replay", "0.5", "--merge"]),
+    ("forge", "forged frames 0.1% of link-steps and inits, no authentication", "huddle_sim", 5000,
+     ["--forge", "0.001"]),
+    ("forge", "forged frames 1% of link-steps and inits, no authentication", "huddle_sim", 5000,
+     ["--forge", "0.01"]),
+    ("forge", "forged frames 1%, monotone merge, no authentication", "huddle_sim", 5000,
+     ["--forge", "0.01", "--merge"]),
 ]
 
 FIELDS = ("trials complete unreachable hole deadlock misposition off_target step_limit steps "
@@ -117,7 +131,7 @@ def main():
             print(f"  {line}", file=sys.stderr)
 
     print(f"Seed {SEED}. Sync run: {shape_note}.\n")
-    for section in ("sync", "control", "ambiguity", "lossy", "latency"):
+    for section in ("sync", "control", "ambiguity", "lossy", "latency", "replay", "forge"):
         print(header)
         print("\n".join(section_rows[section]))
         print()

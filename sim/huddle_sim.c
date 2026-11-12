@@ -11,6 +11,15 @@
  *            delivered after 0..--delay steps; robots act on the newest word
  *            they have. --unknown picks what a robot assumes before the first
  *            word from a new neighbor arrives.
+ *   replay   (--replay RATE) each link step, with probability RATE, the receiver
+ *            is handed an older status word the neighbor really sent. Without
+ *            --merge the receiver overwrites its view with it (as an
+ *            unauthenticated, sequence-less receiver would); with --merge it
+ *            applies the monotone merge.
+ *   forge    (--forge RATE) each link step, with probability RATE, a false status
+ *            word reaches the receiver (free walls claimed occupied, or all
+ *            null); each initialization has probability RATE of receiving a
+ *            false pose word. No authentication is modeled.
  *   latency  a passing-by robot commits to a signaled opening at step t and
  *            docks at step t + --latency; --recheck makes it abort if the
  *            opening is no longer signaled when it arrives.
@@ -28,6 +37,7 @@
 #define MAX_CELLS 1024
 #define MAX_DELAY 8
 #define MAX_K 4
+#define SENT_LOG 8 /* a robot sends at most 7 distinct status words */
 
 typedef struct {
     bool lossy;
@@ -38,6 +48,9 @@ typedef struct {
     bool recheck;
     bool ablate_delay; /* negative control: Algorithm 6 sees no neighbor state */
     bool blind_simultaneous; /* same-step dockers do not see each other at init */
+    double replay;           /* per link-step chance of an old status word */
+    bool merge;              /* receiver merges words monotonically */
+    double forge;            /* per link-step chance of a false word */
 } link_config;
 
 typedef struct {
@@ -199,6 +212,9 @@ typedef struct {
     huddle_robot core;
     int16_t neighbor[HUDDLE_WALLS];
     uint16_t view[HUDDLE_WALLS];
+    bool view_valid[HUDDLE_WALLS];
+    uint16_t sent_log[SENT_LOG]; /* distinct status words this robot has sent, oldest first */
+    int sent_log_len;
     int32_t view_sent_at[HUDDLE_WALLS];
     message inbox[HUDDLE_WALLS][MAX_DELAY + 1];
     uint8_t last_signals;
@@ -255,7 +271,42 @@ static uint16_t neighbor_word(const sim_robot *robot, int wall, const link_confi
     return robot->view[wall];
 }
 
+static void accept_word(sim_robot *robot, int wall, uint16_t word, const link_config *link) {
+    bool merge = link->merge && robot->view_valid[wall];
+    robot->view[wall] = merge ? huddle_merge_status_word(robot->view[wall], word) : word;
+    robot->view_valid[wall] = true;
+}
+
+static void log_sent_word(sim_robot *robot, uint16_t word) {
+    int n = robot->sent_log_len;
+    if (n > 0 && robot->sent_log[n - 1] == word) return;
+    if (n < SENT_LOG) robot->sent_log[robot->sent_log_len++] = word;
+}
+
+/* Free walls claimed occupied (skips Algorithm 6's delay), or everything null. */
+static uint16_t forged_word(uint16_t truth, rng *r) {
+    if (rng_below(r, 2)) return 0;
+    uint16_t free_fields = (uint16_t)(truth & 0x5555u & ~(truth >> 1));
+    return (uint16_t)(truth ^ (free_fields * 3u));
+}
+
+/* Frames an attacker adds on the link sender -> robot (wall w), on top of real traffic. */
+static void inject_frames(sim_robot *robot, int w, const sim_robot *sender, const link_config *link,
+                          rng *r) {
+    bool injected = false;
+    if (link->replay > 0 && sender->sent_log_len > 1 && rng_unit(r) < link->replay) {
+        accept_word(robot, w, sender->sent_log[rng_below(r, sender->sent_log_len - 1)], link);
+        injected = true;
+    }
+    if (link->forge > 0 && rng_unit(r) < link->forge) {
+        accept_word(robot, w, forged_word(sender->sent_log[sender->sent_log_len - 1], r), link);
+        injected = true;
+    }
+    if (injected && robot->view_sent_at[w] < 0) robot->view_sent_at[w] = 0;
+}
+
 static void exchange_status(int robot_count, int now, const link_config *link, rng *r) {
+    for (int i = 0; i < robot_count; i++) log_sent_word(&g_robots[i], huddle_status_word(&g_robots[i].core));
     for (int i = 0; i < robot_count; i++) {
         sim_robot *robot = &g_robots[i];
         for (int w = 0; w < HUDDLE_WALLS; w++) {
@@ -263,7 +314,8 @@ static void exchange_status(int robot_count, int now, const link_config *link, r
             if (n < 0) continue;
             uint16_t word = huddle_status_word(&g_robots[n].core);
             if (!link->lossy) {
-                robot->view[w] = word;
+                accept_word(robot, w, word, link);
+                inject_frames(robot, w, &g_robots[n], link, r);
                 continue;
             }
             if (rng_unit(r) >= link->drop) {
@@ -278,10 +330,11 @@ static void exchange_status(int robot_count, int now, const link_config *link, r
                 if (!m->in_flight || m->deliver_at > now) continue;
                 m->in_flight = false;
                 if (m->sent_at > robot->view_sent_at[w]) {
-                    robot->view[w] = m->word;
+                    accept_word(robot, w, m->word, link);
                     robot->view_sent_at[w] = m->sent_at;
                 }
             }
+            inject_frames(robot, w, &g_robots[n], link, r);
         }
     }
 }
@@ -347,8 +400,17 @@ static void place_robot(world *wd, huddle_cell cell) {
 }
 
 /* Wires up attachments for this step's new robots and runs their Initialization. */
+/* A pose word naming a wrong sender cell and wall, as a forger would send. */
+static uint32_t forged_pose(huddle_cell truth, rng *r) {
+    uint32_t word = 0;
+    huddle_cell fake = {(int16_t)(truth.p + rng_below(r, 7) - 3), (int16_t)(truth.q + rng_below(r, 7) - 3)};
+    huddle_pose_word(fake, rng_below(r, HUDDLE_WALLS), &word);
+    return word;
+}
+
 static bool initialize_new_robots(world *wd, const target_shape *shape, const int16_t *senders,
-                                  const int8_t *sender_walls, bool blind_simultaneous) {
+                                  const int8_t *sender_walls, const link_config *link, rng *r) {
+    bool blind_simultaneous = link->blind_simultaneous;
     int first_new = wd->new_count ? wd->new_ids[0] : wd->robot_count;
     for (int i = 0; i < wd->new_count; i++) {
         int id = wd->new_ids[i];
@@ -369,12 +431,17 @@ static bool initialize_new_robots(world *wd, const target_shape *shape, const in
             huddle_init_root(&robot->core, &shape->view, occupied);
         } else {
             uint32_t pose;
-            if (!huddle_pose_word(g_robots[senders[i]].core.position, sender_walls[i], &pose) ||
-                !huddle_init_from_neighbor(&robot->core, &shape->view, pose, occupied)) {
+            huddle_cell sender = g_robots[senders[i]].core.position;
+            bool ok = huddle_pose_word(sender, sender_walls[i], &pose);
+            if (link->forge > 0 && rng_unit(r) < link->forge) pose = forged_pose(sender, r);
+            ok = ok && huddle_init_from_neighbor(&robot->core, &shape->view, pose, occupied);
+            if (!ok) {
+                robot->core.position = actual; /* reset_world clears the board by position */
                 return false;
             }
         }
         if (robot->core.position.p != actual.p || robot->core.position.q != actual.q) {
+            robot->core.position = actual;
             return false;
         }
     }
@@ -510,7 +577,7 @@ static trial_result run_trial(const target_shape *shape, int k, const link_confi
     place_robot(&wd, (huddle_cell){0, 0});
     senders[0] = -1;
     sender_walls[0] = -1;
-    if (!initialize_new_robots(&wd, shape, senders, sender_walls, link->blind_simultaneous)) {
+    if (!initialize_new_robots(&wd, shape, senders, sender_walls, link, r)) {
         result.result = OUTCOME_MISPOSITION;
         goto done;
     }
@@ -572,7 +639,7 @@ static trial_result run_trial(const target_shape *shape, int k, const link_confi
             place_robot(&wd, due.cell);
         }
         pending = kept;
-        if (!initialize_new_robots(&wd, shape, senders, sender_walls, link->blind_simultaneous)) {
+        if (!initialize_new_robots(&wd, shape, senders, sender_walls, link, r)) {
             result.result = OUTCOME_MISPOSITION;
             break;
         }
@@ -666,7 +733,10 @@ static const char *model_label(const link_config *link, char *buf, size_t len) {
                       link->recheck ? "on" : "off");
     }
     if (link->ablate_delay) n += snprintf(buf + n, len - (size_t)n, " Algorithm-6-disabled");
-    if (link->blind_simultaneous) snprintf(buf + n, len - (size_t)n, " blind-simultaneous");
+    if (link->blind_simultaneous) n += snprintf(buf + n, len - (size_t)n, " blind-simultaneous");
+    if (link->replay > 0) n += snprintf(buf + n, len - (size_t)n, " replay=%.2f", link->replay);
+    if (link->forge > 0) n += snprintf(buf + n, len - (size_t)n, " forge=%.3f", link->forge);
+    if (link->merge) snprintf(buf + n, len - (size_t)n, " merge");
     return buf;
 }
 
@@ -674,12 +744,13 @@ static void usage(void) {
     fprintf(stderr,
             "usage: huddle_sim [--shapes N] [--seed S] [--offset I] [--min-size A] [--max-size B]\n"
             "                  [--k K | --k-range A B] [--verify-holes] [--render]\n"
-            "                  [--lossy DROP DELAY free|null] [--latency L on|off] [--no-delay]\n");
+            "                  [--lossy DROP DELAY free|null] [--latency L on|off] [--no-delay]\n"
+            "                  [--replay RATE] [--forge RATE] [--merge]\n");
     exit(2);
 }
 
 static options parse_options(int argc, char **argv) {
-    options o = {1, 1000, 0, 10, 300, 1, MAX_K, false, false, {false, 0, 0, true, 0, false, false, false}};
+    options o = {1, 1000, 0, 10, 300, 1, MAX_K, false, false, {false, 0, 0, true, 0, false, false, false, 0, false, 0}};
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         bool more = i + 1 < argc;
@@ -696,6 +767,9 @@ static options parse_options(int argc, char **argv) {
         else if (!strcmp(a, "--render")) o.render = true;
         else if (!strcmp(a, "--no-delay")) o.link.ablate_delay = true;
         else if (!strcmp(a, "--blind-simultaneous")) o.link.blind_simultaneous = true;
+        else if (!strcmp(a, "--merge")) o.link.merge = true;
+        else if (!strcmp(a, "--replay") && more) o.link.replay = atof(argv[++i]);
+        else if (!strcmp(a, "--forge") && more) o.link.forge = atof(argv[++i]);
         else if (!strcmp(a, "--lossy") && i + 3 < argc) {
             o.link.lossy = true;
             o.link.drop = atof(argv[++i]);
@@ -708,7 +782,8 @@ static options parse_options(int argc, char **argv) {
     }
     if (o.min_size < 1 || o.max_size >= MAX_CELLS || o.min_size > o.max_size || o.k_min < 1 ||
         o.k_max > MAX_K || o.k_min > o.k_max || o.link.delay < 0 || o.link.delay > MAX_DELAY ||
-        o.link.drop < 0 || o.link.drop >= 1 || o.link.latency < 0) {
+        o.link.drop < 0 || o.link.drop >= 1 || o.link.replay < 0 || o.link.replay > 1 ||
+        o.link.forge < 0 || o.link.forge > 1 || o.link.latency < 0) {
         usage();
     }
     return o;
