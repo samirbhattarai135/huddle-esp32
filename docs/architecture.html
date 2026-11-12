@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-IGW1COEDp7kQ5Q67c45N7s2Nbq6Upzj02D9yhUwA++c='; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Huddle on ESP32</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: floor plan. Concrete-grey ground, robots in hex cells, ochre for signals, slate for structure. */
+:root {
+  --bg: #f1f1ee;
+  --surface: #fbfbf9;
+  --ink: #1d2226;
+  --muted: #5d6468;
+  --line: #cfd0ca;
+  --slate: #34556b;
+  --slate-soft: #dbe5ec;
+  --signal: #a86f00;
+  --signal-soft: #f6e7c4;
+  --good: #3d7a3a;
+  --good-soft: #dcecd9;
+  --bad: #b02f25;
+  --bad-soft: #f5dbd8;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141719; --surface: #1c2023; --ink: #e6e7e3; --muted: #9aa1a5; --line: #343a3e;
+    --slate: #8db4cf; --slate-soft: #1f3341; --signal: #e8b34a; --signal-soft: #3a2c10;
+    --good: #8cc887; --good-soft: #1d3220; --bad: #ee8a80; --bad-soft: #3d1d1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141719; --surface: #1c2023; --ink: #e6e7e3; --muted: #9aa1a5; --line: #343a3e;
+  --slate: #8db4cf; --slate-soft: #1f3341; --signal: #e8b34a; --signal-soft: #3a2c10;
+  --good: #8cc887; --good-soft: #1d3220; --bad: #ee8a80; --bad-soft: #3d1d1a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 var(--f-body); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 56px; }
+.prose { max-width: 64ch; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.1; margin: 0; }
+h1 { font-size: clamp(2.4rem, 6vw, 3.8rem); font-weight: 700; }
+h2 { font-size: 1.8rem; font-weight: 600; }
+h3 { font-size: 1.2rem; font-weight: 600; }
+p { margin: 0; }
+section { display: grid; gap: 18px; min-width: 0; }
+.eyebrow { font: 600 0.74rem/1 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--signal); }
+.lede { font-size: 1.18rem; color: var(--muted); max-width: 60ch; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: 0.92em; }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip { border: 1px solid var(--line); background: var(--surface); padding: 10px 14px; border-radius: 4px; display: grid; gap: 2px; min-width: 150px; }
+.chip b { font: 600 1.3rem/1.1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.chip span { font-size: 0.85rem; color: var(--muted); }
+.chip.warn { border-color: var(--signal); background: var(--signal-soft); }
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; overflow-x: auto; min-width: 0; }
+.figure svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.figure.small svg { min-width: 0; }
+.cap { font-size: 0.86rem; color: var(--muted); }
+svg text { font-family: var(--f-mono); fill: var(--ink); }
+svg .t-muted { fill: var(--muted); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+svg .core { fill: var(--signal-soft); stroke: var(--signal); }
+svg .host { fill: var(--slate-soft); stroke: var(--slate); }
+svg .hw { fill: var(--good-soft); stroke: var(--good); }
+svg .wire { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.cols > * { min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 10px; align-content: start; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.84rem; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 12px; border: 1.5px solid; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
+button, select, input { font: 500 0.86rem/1 var(--f-mono); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+button { cursor: pointer; }
+button:hover { border-color: var(--signal); }
+button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+label { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+input[type=number] { width: 100%; }
+.form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.readout { border-left: 3px solid var(--signal); padding: 4px 0 4px 14px; min-height: 3em; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.74rem/1.2 var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+td.n { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.tablewrap { overflow-x: auto; }
+.bits { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; font: 500 0.7rem/1 var(--f-mono); }
+.bits > div { display: grid; gap: 3px; text-align: center; }
+.bits .v { padding: 6px 0; border-radius: 2px; background: var(--slate-soft); color: var(--ink); }
+.bits .v.one { background: var(--slate); color: var(--bg); }
+.bits .k { color: var(--muted); font-size: 0.62rem; }
+.field-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.field { border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; font: 500 0.78rem/1.3 var(--f-mono); }
+.big { font: 600 1.25rem/1.2 var(--f-mono); }
+.status { display: inline-block; font: 600 0.72rem/1 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 5px 8px; border-radius: 3px; background: var(--signal-soft); color: var(--signal); }
+.rule { border: 1px solid var(--slate); background: var(--slate-soft); border-radius: 6px; padding: 14px 16px; font-weight: 500; }
+#tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font: 500 0.78rem/1.3 var(--f-mono); padding: 6px 8px; border-radius: 3px; }
+footer { color: var(--muted); font-size: 0.84rem; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 520px) { .form { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header style="display:grid;gap:18px">
+  <div class="eyebrow">C99 · ESP32 · ESP-NOW · huddle-esp32</div>
+  <h1>Huddle on ESP32</h1>
+  <p class="lede">Huddle is a paper from Amazon Robotics (DARS 2026). Simple hexagon robots build a shape together. No robot has a map or a leader. Each robot knows its own six walls and gets two numbers from each neighbour. This project does the algorithm again in C, tests it on 160,000 shapes, and puts it on ESP32 boards.</p>
+  <div class="chips">
+    <div class="chip"><b>160,000 / 160,000</b><span>shapes complete, paper model</span></div>
+    <div class="chip"><b>18 bytes</b><span>6 B payload + seq + SipHash tag</span></div>
+    <div class="chip"><b>100%</b><span>complete at 90% frame loss</span></div>
+    <div class="chip warn"><b>not flashed</b><span>hardware demo is pending</span></div>
+  </div>
+</header>
+
+<section>
+  <div class="eyebrow">1 · Software layers</div>
+  <h2>One core, four users</h2>
+  <p class="prose">All decisions are in <span class="mono">core/huddle.c</span>. It is about 300 lines of portable C99. It uses no heap and no global state. Each function is a pure function. Thus the same file runs in the simulator, in the tests, on the host and on the ESP32.</p>
+  <div class="figure">
+    <svg viewBox="0 0 880 330" role="img" aria-label="Software layers">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+      <g font-size="12">
+        <rect class="box core" x="320" y="20" width="240" height="70" rx="6"/>
+        <text x="440" y="46" text-anchor="middle" font-weight="600" font-size="14">core/huddle.c</text>
+        <text x="440" y="66" text-anchor="middle" class="t-muted">Algorithms 1–6, wire format</text>
+        <rect class="box host" x="20" y="150" width="190" height="64" rx="6"/>
+        <text x="115" y="176" text-anchor="middle" font-weight="600">sim/huddle_sim.c</text>
+        <text x="115" y="196" text-anchor="middle" class="t-muted" font-size="11">Monte Carlo + checkers</text>
+        <rect class="box host" x="230" y="150" width="190" height="64" rx="6"/>
+        <text x="325" y="176" text-anchor="middle" font-weight="600">test/test_core.c</text>
+        <text x="325" y="196" text-anchor="middle" class="t-muted" font-size="11">cases from Figs. 2, 3</text>
+        <rect class="box core" x="460" y="150" width="190" height="64" rx="6"/>
+        <text x="555" y="176" text-anchor="middle" font-weight="600">firmware/node.c</text>
+        <text x="555" y="196" text-anchor="middle" class="t-muted" font-size="11">arena protocol, links</text>
+        <rect class="box hw" x="400" y="256" width="200" height="56" rx="6"/>
+        <text x="500" y="280" text-anchor="middle" font-weight="600">huddle_node.ino</text>
+        <text x="500" y="298" text-anchor="middle" class="t-muted" font-size="11">ESP-NOW, serial, LED</text>
+        <rect class="box host" x="620" y="256" width="170" height="56" rx="6"/>
+        <text x="705" y="280" text-anchor="middle" font-weight="600">tools/fake_node</text>
+        <text x="705" y="298" text-anchor="middle" class="t-muted" font-size="11">same logic on host</text>
+        <rect class="box host" x="690" y="150" width="170" height="64" rx="6"/>
+        <text x="775" y="176" text-anchor="middle" font-weight="600">tools/arena.py</text>
+        <text x="775" y="196" text-anchor="middle" class="t-muted" font-size="11">world + ground truth</text>
+        <path class="wire" d="M380 90 C380 120, 115 120, 115 150" marker-start="url(#ah)"/>
+        <path class="wire" d="M325 90 V150" marker-start="url(#ah)"/>
+        <path class="wire" d="M500 90 C500 120, 555 120, 555 150" marker-start="url(#ah)"/>
+        <path class="wire" d="M530 214 V256" marker-start="url(#ah)"/>
+        <path class="wire" d="M600 214 C600 240, 705 230, 705 256" marker-start="url(#ah)"/>
+        <path class="wire" d="M775 214 V240 H600" marker-end="url(#ah)" stroke-dasharray="4 3"/>
+        <text x="790" y="236" font-size="10" class="t-muted">USB serial / pipes</text>
+        <text x="20" y="320" font-size="10" class="t-muted">arrow head = "uses"</text>
+      </g>
+    </svg>
+  </div>
+  <div class="legend"><span><i style="border-color:var(--signal);background:var(--signal-soft)"></i>runs on the ESP32</span><span><i style="border-color:var(--slate);background:var(--slate-soft)"></i>runs on the laptop</span><span><i style="border-color:var(--good);background:var(--good-soft)"></i>ESP32 only</span></div>
+</section>
+
+<section>
+  <div class="eyebrow">2 · One robot</div>
+  <h2>Six walls, three states</h2>
+  <div class="cols">
+    <div class="figure small">
+      <svg id="hex" viewBox="-170 -150 340 300" role="img" aria-label="One hexagon robot. Click a wall to change its status."></svg>
+    </div>
+    <div class="card">
+      <p>Wall 0 is the front (F). The labels go counter-clockwise. Each wall has one status:</p>
+      <p><b style="color:var(--muted)">null</b>: no robot can attach here. The cell behind it is not in the shape.<br>
+      <b style="color:var(--signal)">free</b>: a robot can attach. Nobody is there yet.<br>
+      <b style="color:var(--slate)">occupied</b>: a neighbour is attached.</p>
+      <p>Click a wall to change its status. The robot packs the six statuses into its 16-bit status word, two bits per wall.</p>
+      <div class="bits" id="sw"></div>
+      <div class="big" id="swHex"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">3 · The algorithms</div>
+  <h2>Decide once at docking. Decide again each step.</h2>
+  <div class="figure">
+    <svg viewBox="0 0 880 300" role="img" aria-label="Algorithm pipeline">
+      <defs><marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>
+      <g font-size="12">
+        <text x="20" y="26" font-weight="600" fill="var(--slate)">ONE TIME · at docking</text>
+        <rect class="box host" x="20" y="40" width="160" height="56" rx="6"/><text x="100" y="64" text-anchor="middle" font-weight="600">pose word</text><text x="100" y="82" text-anchor="middle" font-size="11" class="t-muted">from neighbour</text>
+        <rect class="box host" x="220" y="40" width="150" height="56" rx="6"/><text x="295" y="64" text-anchor="middle" font-weight="600">position</text><text x="295" y="82" text-anchor="middle" font-size="11" class="t-muted">sender + (du, dv)</text>
+        <rect class="box core" x="410" y="40" width="200" height="56" rx="6"/><text x="510" y="64" text-anchor="middle" font-weight="600">Alg 1 (uses 2, 3)</text><text x="510" y="82" text-anchor="middle" font-size="11" class="t-muted">nucleus left? right?</text>
+        <rect class="box core" x="650" y="40" width="210" height="56" rx="6"/><text x="755" y="64" text-anchor="middle" font-weight="600">Alg 4</text><text x="755" y="82" text-anchor="middle" font-size="11" class="t-muted">growth g ∈ {−1, 0, +1}</text>
+        <path class="wire" d="M180 68 H220" marker-end="url(#ah4)"/><path class="wire" d="M370 68 H410" marker-end="url(#ah4)"/><path class="wire" d="M610 68 H650" marker-end="url(#ah4)"/>
+        <text x="20" y="150" font-weight="600" fill="var(--signal)">EVERY STEP · 100 ms on the board</text>
+        <rect class="box host" x="20" y="164" width="160" height="56" rx="6"/><text x="100" y="188" text-anchor="middle" font-weight="600">status words</text><text x="100" y="206" text-anchor="middle" font-size="11" class="t-muted">from neighbours</text>
+        <rect class="box core" x="220" y="164" width="190" height="56" rx="6"/><text x="315" y="188" text-anchor="middle" font-weight="600">Alg 5 · W</text><text x="315" y="206" text-anchor="middle" font-size="11" class="t-muted">fore-aft first, flanks after</text>
+        <rect class="box core" x="450" y="164" width="200" height="56" rx="6"/><text x="550" y="188" text-anchor="middle" font-weight="600">Alg 6 · W̃</text><text x="550" y="206" text-anchor="middle" font-size="11" class="t-muted">delay while parent col free</text>
+        <rect class="box hw" x="690" y="164" width="170" height="56" rx="6"/><text x="775" y="188" text-anchor="middle" font-weight="600">signal W \ W̃</text><text x="775" y="206" text-anchor="middle" font-size="11" class="t-muted">LED + SIG line</text>
+        <path class="wire" d="M180 192 H220" marker-end="url(#ah4)"/><path class="wire" d="M410 192 H450" marker-end="url(#ah4)"/><path class="wire" d="M650 192 H690" marker-end="url(#ah4)"/>
+        <path class="wire" d="M755 96 V130 H315 V164" marker-end="url(#ah4)" stroke-dasharray="4 3"/>
+        <text x="330" y="124" font-size="10" class="t-muted">role and g feed Alg 5</text>
+        <text x="20" y="266" font-size="11" class="t-muted">Passing robots dock only at walls that signal.</text>
+        <text x="20" y="284" font-size="11" class="t-muted">Alg 6 keeps every empty target cell reachable: never 4 or more attached neighbours.</text>
+      </g>
+    </svg>
+  </div>
+  <div class="rule">Alg 6 is the safety rule. Without it, 79% of trials leave a cell that no robot can reach. The test harness catches this, so it does not pass everything by default.</div>
+</section>
+
+<section>
+  <div class="eyebrow">4 · Wire format</div>
+  <h2>Two integers in a signed 18-byte frame</h2>
+  <p class="prose">The paper gives the widths, 16 bits and 32 bits. It does not give the field layout. The layout below is my choice. The two words are still the full payload. A sequence number and a 64-bit SipHash-2-4 tag protect them. All fields are little-endian.</p>
+  <div class="field-row" aria-label="Frame layout">
+    <span class="field">0–1 status word</span><span class="field">2–5 pose word</span><span class="field" style="border-color:var(--slate)">6–9 seq</span><span class="field" style="border-color:var(--signal)">10–17 tag = SipHash(key, sender MAC, receiver MAC, seq, payload)</span>
+  </div>
+  <div class="card">
+    <h3>Pose word encoder</h3>
+    <div class="form">
+      <label for="pp">sender column p<input id="pp" type="number" min="-2048" max="2047" value="-1"></label>
+      <label for="pq">sender row q<input id="pq" type="number" min="-2048" max="2047" value="3"></label>
+      <label for="pw">wall that faces you<select id="pw"></select></label>
+    </div>
+    <div class="field-row" id="poseFields"></div>
+    <div class="bits" id="poseBits"></div>
+    <div class="readout" id="poseOut" aria-live="polite"></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">5 · Docking on the bench</div>
+  <h2>The arena tells each board who its neighbours are</h2>
+  <p class="prose">Real robots sense contact on each wall. The boards have no wall sensors yet. The laptop runs <span class="mono">arena.py</span>. It keeps the true map and tells each board about each new contact. A board accepts a frame only from the MAC address bound to that wall.</p>
+  <div class="figure">
+    <svg viewBox="0 0 880 400" role="img" aria-label="Docking sequence between arena, neighbour board and new board">
+      <defs><marker id="ah5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker></defs>
+      <g font-size="12">
+        <rect class="box host" x="60" y="10" width="160" height="34" rx="5"/><text x="140" y="32" text-anchor="middle" font-weight="600">arena.py</text>
+        <rect class="box core" x="360" y="10" width="160" height="34" rx="5"/><text x="440" y="32" text-anchor="middle" font-weight="600">neighbour board</text>
+        <rect class="box core" x="660" y="10" width="160" height="34" rx="5"/><text x="740" y="32" text-anchor="middle" font-weight="600">new board</text>
+        <g stroke="var(--line)" stroke-dasharray="3 4"><path d="M140 44 V390 M440 44 V390 M740 44 V390"/></g>
+        <path d="M140 80 H436" stroke="var(--ink)" marker-end="url(#ah5)"/><text x="150" y="74">1  KEY k, ATTACH wall MAC(new)</text>
+        <path d="M140 124 H736" stroke="var(--ink)" marker-end="url(#ah5)"/><text x="150" y="118">2  KEY k, ATTACH wall MAC(neighbour)</text>
+        <path d="M440 170 H736" stroke="var(--signal)" stroke-width="2" marker-end="url(#ah5)"/><text x="450" y="164" fill="var(--signal)">3  ESP-NOW: payload + seq + tag (18 B)</text>
+        <rect x="610" y="188" width="260" height="62" rx="5" class="box"/>
+        <text x="620" y="208" font-size="11">4  MAC bound? tag OK? seq new? else drop</text>
+        <text x="620" y="226" font-size="11">5  position = sender + (du, dv)</text>
+        <text x="620" y="242" font-size="11">    run Alg 1–4</text>
+        <path d="M740 284 H144" stroke="var(--ink)" marker-end="url(#ah5)"/><text x="420" y="278">6  INIT p q …</text>
+        <rect x="20" y="296" width="240" height="40" rx="5" class="box"/>
+        <text x="30" y="320" font-size="11">7  compare with true map; fail if wrong</text>
+        <path d="M740 370 H444" stroke="var(--signal)" stroke-width="2" marker-end="url(#ah5)" stroke-dasharray="6 3"/><text x="460" y="364" fill="var(--signal)">8  every 100 ms: frames both ways</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The arena makes a new 128-bit session key for each run and sends it over USB. The board keeps it in RAM only. A frame that comes before its ATTACH line is dropped; the neighbour sends it again in the next step. Frames are signed, not encrypted. Positions are not secret.</p>
+</section>
+
+<section>
+  <div class="eyebrow">6 · Results</div>
+  <h2>What the Monte Carlo runs show</h2>
+  <p class="prose">Each run uses 40,000 random hole-free shapes, 10 to 300 cells (mean 155.4). k is the number of robots that dock in one step. The checkers test reachability and holes after every step.</p>
+  <div class="cols">
+    <div class="figure small"><svg id="steps" viewBox="0 0 400 260" role="img" aria-label="Mean steps to complete for k equals 1 to 4"></svg></div>
+    <div class="card">
+      <h3>Lost messages</h3>
+      <p>The paper expects each neighbour message to arrive each step. The harness drops and delays messages. Select what a robot must think about a neighbour it has not heard from yet.</p>
+      <div class="btns" id="polBtns" role="group" aria-label="Unknown neighbour policy">
+        <button type="button" data-p="free" aria-pressed="true">assume all walls free</button>
+        <button type="button" data-p="null" aria-pressed="false">assume null</button>
+      </div>
+      <svg id="loss" viewBox="0 0 400 200" role="img" aria-label="Completion rate under frame loss"></svg>
+      <div class="readout" id="lossOut" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">7 · Attacks on the radio link</div>
+  <h2>Replay is safe. Forgery is not.</h2>
+  <p class="prose">ESP-NOW had a replay flaw: CVE-2024-42483 and CVE-2024-42484 (Nozomi Networks, 2024). An attacker can send old frames again, also encrypted ones. Before this change, the only check was the source MAC address, and a radio can fake it. The simulator now attacks the link in two ways.</p>
+  <div class="cols">
+    <div class="card">
+      <h3>Replay: send an old status word again</h3>
+      <p>A wall only goes from free to occupied. An old word is "more free", so it can only add delay. All 20,000 trials finish, also at 100% replay.</p>
+      <p>Without a merge, signals go on and off: 731,873 withdrawn signals at 50% replay. The <b>monotone merge</b> keeps the highest status per wall. Then the count is 0.</p>
+      <div class="field-row"><span class="field">free → occupied: accept</span><span class="field">occupied → free: ignore</span><span class="field">null: never changes</span></div>
+    </div>
+    <div class="card">
+      <h3>Forgery: send a false word</h3>
+      <p>Select a forgery rate. No authentication.</p>
+      <div class="btns" id="forgeBtns" role="group" aria-label="Forgery rate"></div>
+      <svg id="forge" viewBox="0 0 400 120" role="img" aria-label="Trials complete under forgery"></svg>
+      <div class="readout" id="forgeOut" aria-live="polite"></div>
+    </div>
+  </div>
+  <div class="rule">The merge stops replay. The tag stops forgery. A board drops each frame that fails the tag, or that has a sequence number it saw before.</div>
+  <div class="cols">
+    <div class="card"><h3>Session key</h3><p>Espressif advisory AR2026-005 (2026) shows a voltage glitch can get an AES key out of an ESP32-S3. The base ESP32 has no glitch detector. Espressif tells users to use short-life keys. Thus each run gets a new key, in RAM only.</p></div>
+    <div class="card"><h3>Tests</h3><p><span class="mono">test_node</span> changes each byte of a frame, replays frames, and uses a wrong key, no key, a fake source and a wrong destination. Each one is dropped. The SipHash code passes the published test vectors.</p></div>
+    <div class="card"><span class="status">open</span><p>No secure boot or flash encryption. The key goes over USB, which is trusted. Not tested on boards yet. Whether arduino-esp32 3.3.10 has the CVE-2024-42483 code is unconfirmed; the tag and sequence check do not depend on it.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">8 · One finished shape</div>
+  <h2>94 robots, k = 2</h2>
+  <p class="prose">This is real output from <span class="mono">huddle_sim --render</span>. Point at a robot to see its role. Each L, R or B robot starts a new column on its left, right or both sides.</p>
+  <div class="figure" style="position:relative"><svg id="asm" role="img" aria-label="Final assembly of 94 robots"></svg><div id="tip" hidden></div></div>
+  <div class="legend"><span><i style="background:var(--bad);border-color:var(--bad)"></i>@ root</span><span><i style="background:var(--slate);border-color:var(--slate)"></i>L / R / B nucleus</span><span><i style="background:var(--signal-soft);border-color:var(--signal)"></i>regular robot</span></div>
+</section>
+
+<section>
+  <div class="eyebrow">9 · Changes from the paper</div>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Item</th><th>Paper</th><th>This project</th></tr>
+    <tr><td>Shape input</td><td>Perimeter, Johnson cycles, ray casting</td><td>Shape as a bitmap. Same wall classification.</td></tr>
+    <tr><td>Motion and sensing</td><td>Abstract in Monte Carlo</td><td>Same. The arena emulates contact sensors.</td></tr>
+    <tr><td>Orientation</td><td>Rotate wall labels from unit vector</td><td>All robots point north. Not tested yet.</td></tr>
+    <tr><td>Unheard neighbour</td><td>Not stated</td><td>Assume all walls free. This is the safe choice.</td></tr>
+    <tr><td>Wire layout</td><td>Widths only</td><td>Fields as in section 4. Positions −2048 to 2047.</td></tr>
+    <tr><td>Link security</td><td>Not stated</td><td>Sequence number, SipHash-2-4 tag, session key, monotone merge</td></tr>
+  </table>
+  </div>
+  <div class="card">
+    <h3>A compiler bug</h3>
+    <p>The first runs had deadlocks. The cause was the loop vectorizer in Apple clang 21 at -O2. It miscompiled one loop over the shape. A 25-line file shows it: -O0 prints <span class="mono">-2 -1 2 3</span>, -O2 prints <span class="mono">-8 -4 8 8</span>. The build now uses <span class="mono">-fno-vectorize</span>. <span class="mono">make test</span> checks that -O0 and -O2 give the same results.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">10 · Next steps</div>
+  <div class="cols">
+    <div class="card"><span class="status">to do</span><p>Flash 6 or 7 ESP32 boards. Run <span class="mono">arena.py --ports …</span>. Record frame loss.</p></div>
+    <div class="card"><span class="status">to do</span><p>Replace ATTACH lines with reed or Hall sensors on each wall. Replace SIG lines with directional IR.</p></div>
+    <div class="card"><span class="status">to do</span><p>Test the tag and sequence checks on real boards. Optionally add ESP-NOW LMK encryption. Test robots with random rotation.</p></div>
+  </div>
+  <p class="cap">Firmware size (ESP32 Dev Module, core 3.3.10): 921,520 B flash (70%), 45,712 B RAM (13%). One node state is 280 bytes on the host build.</p>
+</section>
+
+<footer>Written in ASD-STE100 Simplified Technical English. Paper: Chin, Meng, Chen, Bassett, Ivanov, "Huddle: Parallel Shape Assembly using Decentralized, Minimalistic Robots", DARS 2026. All numbers come from <span class="mono">make experiments</span>, seed 1.</footer>
+</div>
+
+<script type="text/plain" id="asmData">
+                   o                
+                                    
+                   o                
+                      L     o       
+                         o     o    
+                      o     R       
+             o     o     R          
+                      R             
+             o     o           o    
+          o     o     o     o       
+       o     o     o     o     o    
+          o     o     o     o       
+       o     o     o     o     o    
+    o     L     o     o     o       
+       L     o     o     o     o    
+    o     o     L     o     o     o 
+       o     L     B     o     R    
+    o     o     o     o     R       
+       o     o     o     R     o    
+          o     o     R     o     o 
+             o     o     o     R    
+          o     o     o     o       
+       o     o     o     o     o    
+          L     o     o     o       
+       L     o     @     o     o    
+    o                 o             
+                   o                </script>
+<script>
+(() => {
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (t, a, p, txt) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; if (p) p.appendChild(e); return e; };
+  const WALLS = [["F", 0, 1], ["FL", -1, 1], ["RL", -1, 0], ["R", 0, -1], ["RR", 1, -1], ["FR", 1, 0]];
+  const ST = ["null", "free", "occupied"];
+  const stColor = ["var(--line)", "var(--signal)", "var(--slate)"];
+
+  /* ---------- One robot: wall status and status word (huddle_status_word) ---------- */
+  const status = [2, 1, 0, 2, 1, 0];
+  const hex = document.getElementById("hex"), R = 90;
+  el("polygon", { points: [0, 1, 2, 3, 4, 5].map(i => { const a = i * Math.PI / 3; return `${R * Math.cos(a)},${-R * Math.sin(a)}`; }).join(" "), fill: "var(--signal-soft)", stroke: "none" }, hex);
+  el("text", { x: 0, y: 6, "text-anchor": "middle", "font-size": 13, "font-weight": 600 }, hex, "robot");
+  const edges = WALLS.map((w, i) => {
+    const mid = (90 + 60 * i) * Math.PI / 180, a1 = mid - Math.PI / 6, a2 = mid + Math.PI / 6;
+    const g = el("g", { tabindex: 0, role: "button", style: "cursor:pointer" }, hex);
+    el("line", { x1: R * Math.cos(a1), y1: -R * Math.sin(a1), x2: R * Math.cos(a2), y2: -R * Math.sin(a2), stroke: "transparent", "stroke-width": 24 }, g);
+    const line = el("line", { x1: R * Math.cos(a1), y1: -R * Math.sin(a1), x2: R * Math.cos(a2), y2: -R * Math.sin(a2), "stroke-width": 7, "stroke-linecap": "round" }, g);
+    const lx = 118 * Math.cos(mid), ly = -118 * Math.sin(mid);
+    el("text", { x: lx, y: ly - 2, "text-anchor": "middle", "font-size": 13, "font-weight": 600 }, g, `${i} ${w[0]}`);
+    const sub = el("text", { x: lx, y: ly + 13, "text-anchor": "middle", "font-size": 10, class: "t-muted" }, g);
+    const flip = () => { status[i] = (status[i] + 1) % 3; drawRobot(); };
+    g.addEventListener("click", flip); g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } });
+    return { line, sub, g, w };
+  });
+  function drawRobot() {
+    let word = 0;
+    edges.forEach((e, i) => { e.line.setAttribute("stroke", stColor[status[i]]); e.sub.textContent = ST[status[i]]; e.g.setAttribute("aria-label", `wall ${i} ${e.w[0]}: ${ST[status[i]]}`); word |= status[i] << (2 * i); });
+    const sw = document.getElementById("sw"); sw.innerHTML = "";
+    for (let b = 15; b >= 0; b--) {
+      const d = document.createElement("div"), v = (word >> b) & 1;
+      d.innerHTML = `<span class="v ${v ? "one" : ""}">${v}</span><span class="k">${b < 12 ? WALLS[b >> 1][0] : "–"}</span>`;
+      sw.appendChild(d);
+    }
+    document.getElementById("swHex").textContent = "0x" + word.toString(16).toUpperCase().padStart(4, "0") + "  ·  bytes " + [word & 255, word >> 8].map(x => x.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+  }
+  drawRobot();
+
+  /* ---------- Pose word encoder (huddle_pose_word) ---------- */
+  const pw = document.getElementById("pw");
+  WALLS.forEach((w, i) => { const o = document.createElement("option"); o.value = i; o.textContent = `${i} ${w[0]} (${w[1]}, ${w[2]})`; pw.appendChild(o); });
+  pw.value = 5;
+  function pose() {
+    const p = +document.getElementById("pp").value, q = +document.getElementById("pq").value, w = +pw.value;
+    const out = document.getElementById("poseOut"), bits = document.getElementById("poseBits"), fields = document.getElementById("poseFields");
+    if (!Number.isInteger(p) || !Number.isInteger(q) || p < -2048 || p > 2047 || q < -2048 || q > 2047) { out.textContent = "Position must be an integer from −2048 to 2047. The encoder returns false."; bits.innerHTML = ""; return; }
+    const [, du, dv] = WALLS[w];
+    const word = ((p & 0xFFF) | ((q & 0xFFF) << 12) | ((du & 3) << 24) | ((dv & 3) << 26)) >>> 0;
+    const names = b => b < 12 ? "p" : b < 24 ? "q" : b < 26 ? "du" : b < 28 ? "dv" : "0";
+    bits.innerHTML = "";
+    for (let b = 31; b >= 0; b--) { const d = document.createElement("div"), v = (word >>> b) & 1; d.innerHTML = `<span class="v ${v ? "one" : ""}">${v}</span><span class="k">${names(b)}</span>`; bits.appendChild(d); }
+    fields.innerHTML = `<span class="field">31–28: 0</span><span class="field">27–26 dv: ${dv}</span><span class="field">25–24 du: ${du}</span><span class="field">23–12 q: ${q}</span><span class="field">11–0 p: ${p}</span>`;
+    const bytes = [0, 8, 16, 24].map(s => ((word >>> s) & 255).toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    out.innerHTML = `<div class="big">0x${word.toString(16).toUpperCase().padStart(8, "0")}</div><div class="cap">bytes on air: ${bytes} · the new robot sets its position to (${p} + ${du}, ${q} + ${dv}) = (${p + du}, ${q + dv})</div>`;
+  }
+  ["pp", "pq", "pw"].forEach(id => document.getElementById(id).addEventListener("input", pose));
+  pose();
+
+  /* ---------- Steps chart ---------- */
+  const steps = document.getElementById("steps"), SV = [154.4, 79.0, 55.1, 44.0];
+  el("text", { x: 10, y: 20, "font-size": 12, "font-weight": 600 }, steps, "Mean steps to finish");
+  const base = 220, sy = v => base - v / 160 * 170;
+  [0, 50, 100, 150].forEach(v => { el("path", { d: `M50 ${sy(v)} H390`, stroke: "var(--line)", "stroke-dasharray": "2 4" }, steps); el("text", { x: 42, y: sy(v) + 4, "text-anchor": "end", "font-size": 10, class: "t-muted" }, steps, v); });
+  SV.forEach((v, i) => {
+    const x = 70 + i * 82;
+    el("rect", { x, y: sy(v), width: 52, height: base - sy(v), fill: "var(--signal)", rx: 2 }, steps);
+    el("text", { x: x + 26, y: sy(v) - 6, "text-anchor": "middle", "font-size": 11, "font-weight": 600 }, steps, v.toFixed(1));
+    el("text", { x: x + 26, y: base + 16, "text-anchor": "middle", "font-size": 11 }, steps, "k = " + (i + 1));
+  });
+  el("text", { x: 10, y: 256, "font-size": 10, class: "t-muted" }, steps, "Every trial complete: 40,000 per k. No hole, no unreachable cell.");
+
+  /* ---------- Loss chart ---------- */
+  const LOSS = {
+    free: [["10%", 100, "7.74%"], ["30%", 100, "16.54%"], ["60%", 100, "25.90%"], ["90%", 100, "35.88%"]],
+    null: [["10%", 33.88, "0.92%"], ["30%", 24.98, "1.22%"]]
+  };
+  const loss = document.getElementById("loss"), lossOut = document.getElementById("lossOut");
+  function drawLoss(pol) {
+    loss.innerHTML = "";
+    el("text", { x: 0, y: 14, "font-size": 11, class: "t-muted" }, loss, "trials complete, by frame drop rate");
+    LOSS[pol].forEach(([d, v], i) => {
+      const y = 30 + i * 40, w = v / 100 * 280;
+      el("text", { x: 0, y: y + 18, "font-size": 11 }, loss, "drop " + d);
+      el("rect", { x: 80, y: y + 4, width: 280, height: 20, fill: "var(--bad-soft)", rx: 2 }, loss);
+      el("rect", { x: 80, y: y + 4, width: w, height: 20, fill: v === 100 ? "var(--good)" : "var(--bad)", rx: 2 }, loss);
+      el("text", { x: 366, y: y + 18, "font-size": 11, "font-weight": 600 }, loss, v.toFixed(v === 100 ? 0 : 1) + "%");
+    });
+    lossOut.textContent = pol === "free"
+      ? "Safe. A wall goes only from free to occupied. Alg 6 delays a signal only when it sees free. Thus an old status can only add delay. All 20,000 trials finish at each rate, also at 90% drop. Cost: up to 35.88% of signals wait."
+      : "Not safe. A new neighbour with no message looks like it has no free walls. Alg 6 then does not delay. 66% of trials fail at 10% drop. The firmware does not use this setting.";
+    document.querySelectorAll("#polBtns button").forEach(b => b.setAttribute("aria-pressed", b.dataset.p === pol));
+  }
+  document.querySelectorAll("#polBtns button").forEach(b => b.addEventListener("click", () => drawLoss(b.dataset.p)));
+  drawLoss("free");
+
+  /* ---------- Forgery results (make experiments, 5,000 shapes, k = 1..4, seed 1) ---------- */
+  const FORGE = [["0.1%", 17072, 252, 2676, "No merge."], ["1%", 5705, 891, 13397, "No merge."], ["1% + merge", 5681, 1089, 13223, "The merge does not help: a false \"occupied\" is the direction it accepts."]];
+  const forge = document.getElementById("forge"), forgeOut = document.getElementById("forgeOut"), forgeBtns = document.getElementById("forgeBtns");
+  FORGE.forEach(f => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = "forge " + f[0];
+    b.addEventListener("click", () => {
+      [...forgeBtns.children].forEach(x => x.setAttribute("aria-pressed", x === b));
+      const [name, ok, unreach, wrong, note] = f, pct = ok / 200;
+      forge.innerHTML = "";
+      el("text", { x: 0, y: 14, "font-size": 11, class: "t-muted" }, forge, "of 20,000 trials");
+      [["complete", ok, "var(--good)"], ["robot in wrong cell", wrong, "var(--bad)"], ["unreachable cell", unreach, "var(--bad)"]].forEach(([lab, v, c], i) => {
+        const y = 24 + i * 30;
+        el("text", { x: 0, y: y + 15, "font-size": 11 }, forge, lab);
+        el("rect", { x: 150, y: y + 2, width: 200, height: 18, fill: "var(--bad-soft)", rx: 2 }, forge);
+        el("rect", { x: 150, y: y + 2, width: Math.max(200 * v / 20000, 1), height: 18, fill: c, rx: 2 }, forge);
+        el("text", { x: 356, y: y + 15, "font-size": 11, "font-weight": 600 }, forge, v.toLocaleString("en-US"));
+      });
+      forgeOut.textContent = `Forge ${name} of link steps and docking events: only ${pct.toFixed(2)}% of trials finish. ${note}`;
+    });
+    forgeBtns.appendChild(b);
+  });
+  forgeBtns.children[0].click();
+
+  /* ---------- Assembly render from huddle_sim --render ---------- */
+  const lines = document.getElementById("asmData").textContent.replace(/^\n/, "").split("\n");
+  const asm = document.getElementById("asm"), tip = document.getElementById("tip");
+  const r = 13, dx = r * 0.5, dy = r * Math.sqrt(3) / 2;
+  const ROLE = { "@": "root", L: "nucleus: starts the column on its left", R: "nucleus: starts the column on its right", B: "nucleus: starts columns on both sides", o: "regular robot", ".": "empty target cell" };
+  let maxX = 0, maxY = 0, count = 0;
+  const hexPts = (cx, cy) => [0, 1, 2, 3, 4, 5].map(i => { const a = i * Math.PI / 3; return `${(cx + r * 0.95 * Math.cos(a)).toFixed(1)},${(cy + r * 0.95 * Math.sin(a)).toFixed(1)}`; }).join(" ");
+  lines.forEach((ln, row) => [...ln].forEach((ch, col) => {
+    if (!ROLE[ch]) return;
+    const cx = 20 + col * dx, cy = 20 + row * dy;
+    maxX = Math.max(maxX, cx); maxY = Math.max(maxY, cy); count++;
+    const fill = ch === "@" ? "var(--bad)" : ch === "o" ? "var(--signal-soft)" : ch === "." ? "var(--surface)" : "var(--slate)";
+    const stroke = ch === "o" ? "var(--signal)" : ch === "." ? "var(--line)" : fill;
+    const poly = el("polygon", { points: hexPts(cx, cy), fill, stroke, "stroke-width": 1.2 }, asm);
+    if (ch !== "o" && ch !== ".") el("text", { x: cx, y: cy + 4, "text-anchor": "middle", "font-size": 10, "font-weight": 700, fill: "var(--bg)", "pointer-events": "none" }, asm, ch);
+    const showTip = e => { tip.hidden = false; tip.textContent = `${ch}  ${ROLE[ch]}`; const b = asm.parentElement.getBoundingClientRect(); tip.style.left = (e.clientX - b.left + 12) + "px"; tip.style.top = (e.clientY - b.top + 12) + "px"; poly.setAttribute("stroke-width", 3); };
+    poly.addEventListener("mousemove", showTip);
+    poly.addEventListener("mouseleave", () => { tip.hidden = true; poly.setAttribute("stroke-width", 1.2); });
+  }));
+  asm.setAttribute("viewBox", `0 0 ${maxX + 30} ${maxY + 30}`);
+  asm.style.maxWidth = (maxX + 30) * 1.6 + "px"; asm.style.minWidth = "0"; asm.style.margin = "0 auto";
+  asm.setAttribute("aria-label", `Final assembly of ${count} robots`);
+})();
+</script>
+</body>
+</html>
