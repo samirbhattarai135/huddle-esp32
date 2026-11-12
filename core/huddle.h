@@ -103,6 +103,14 @@ uint16_t huddle_status_word(const huddle_robot *robot);
 huddle_status huddle_status_in_word(uint16_t word, int wall);
 
 /*
+ * Monotone merge of a received status word into the word already known for
+ * that neighbor. A wall only ever moves free -> occupied; null walls and
+ * occupied walls never change, and a received null or invalid field is
+ * ignored. A stale or replayed word therefore cannot lower anything.
+ */
+uint16_t huddle_merge_status_word(uint16_t known, uint16_t received);
+
+/*
  * 32-bit pose word, two's complement fields:
  *   bits  0-11  p   (int12)
  *   bits 12-23  q   (int12)

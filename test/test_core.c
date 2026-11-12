@@ -133,6 +133,27 @@ static void test_wire_format(void) {
     CHECK(!huddle_decode_pose(0x10000000u, &out, &wall)); /* reserved bits set */
 }
 
+/* A replayed older word must never move a wall occupied -> free, or change null. */
+static void test_monotone_merge(void) {
+    for (int w = 0; w < HUDDLE_WALLS; w++) {
+        for (unsigned known = 0; known <= 3; known++) {
+            for (unsigned received = 0; received <= 3; received++) {
+                uint16_t merged = huddle_merge_status_word((uint16_t)(known << (2 * w)),
+                                                           (uint16_t)(received << (2 * w)));
+                unsigned want = (known == HUDDLE_FREE && received == HUDDLE_OCCUPIED) ? 2u : known;
+                CHECK(((merged >> (2 * w)) & 3u) == want);
+                CHECK((merged & ~(3u << (2 * w))) == 0);
+            }
+        }
+    }
+    /* Newest word: wall 0 occupied, wall 1 null. Replaying the older word, in
+     * which wall 0 was free and wall 1 free, changes nothing. */
+    uint16_t newest = (uint16_t)(HUDDLE_OCCUPIED | HUDDLE_NULL << 2 | HUDDLE_FREE << 4);
+    uint16_t older = (uint16_t)(HUDDLE_FREE | HUDDLE_FREE << 2 | HUDDLE_FREE << 4);
+    CHECK(huddle_merge_status_word(newest, older) == newest);
+    CHECK(huddle_merge_status_word(older, newest) == (uint16_t)(HUDDLE_OCCUPIED | HUDDLE_FREE << 2 | HUDDLE_FREE << 4));
+}
+
 int main(void) {
     test_figure_2();
     test_flank_between_null_walls();
@@ -140,6 +161,7 @@ int main(void) {
     test_negative_midpoint();
     test_delay();
     test_wire_format();
+    test_monotone_merge();
     printf(failures ? "core tests: %d failed\n" : "core tests: all passed\n", failures);
     return failures != 0;
 }

@@ -258,6 +258,17 @@ huddle_status huddle_status_in_word(uint16_t word, int wall) {
     return (huddle_status)((word >> (2 * wall)) & 3u);
 }
 
+uint16_t huddle_merge_status_word(uint16_t known, uint16_t received) {
+    uint16_t merged = known;
+    for (int w = 0; w < HUDDLE_WALLS; w++) {
+        if (huddle_status_in_word(known, w) == HUDDLE_FREE &&
+            huddle_status_in_word(received, w) == HUDDLE_OCCUPIED) {
+            merged = (uint16_t)(merged ^ (3u << (2 * w))); /* 01 -> 10 */
+        }
+    }
+    return merged;
+}
+
 /* Sign-extends the low `bits` bits of value. */
 static int sign_extend(uint32_t value, int bits) {
     uint32_t mask = (1u << bits) - 1u;
