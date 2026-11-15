@@ -1,7 +1,7 @@
 # huddle-esp32
 
 A from-scratch reimplementation of **Huddle** (Chin, Meng, Chen, Bassett, Ivanov,
-"Huddle: Parallel Shape Assembly using Decentralized, Minimalistic Robots",
+["Huddle: Parallel Shape Assembly using Decentralized, Minimalistic Robots"](https://www.amazon.science/publications/huddle-parallel-shape-assembly-using-decentralized-minimalistic-robots),
 Amazon Robotics, DARS 2026), plus a check of what happens when the neighbor
 link is not the clean per-step exchange the paper assumes, plus firmware that
 runs the algorithm on ESP32 boards talking over ESP-NOW.
@@ -10,6 +10,10 @@ Status: the C implementation and the Monte Carlo results below are real and
 reproducible with the commands in this file. The firmware compiles and its
 logic has been run on the host. **It has not been flashed or run on physical
 boards yet; the hardware demo is pending.**
+
+A diagram-first walk-through of the design is in
+[`docs/architecture.html`](docs/architecture.html); GitHub shows it as source,
+so download it or open it from a local clone.
 
 ## The paper in one paragraph
 
